@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Jit
-version:            0.02
+version:            0.03
 abstract:           ~
 author:
     - Reini Urban <perl-compiler@googlegroups.com>
@@ -12,7 +12,8 @@ build_requires:
     ExtUtils::MakeMaker:  0
 requires:  {}
 resources:
-    license:  http://dev.perl.org/licenses/
+    license:     http://dev.perl.org/licenses/
+    repository:  http://github.com/rurban/Jit/
 no_index:
     directory:
         - t
