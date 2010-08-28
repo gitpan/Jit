@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Jit
-version:            0.03
+version:            0.0301
 abstract:           ~
 author:
     - Reini Urban <perl-compiler@googlegroups.com>
@@ -10,7 +10,8 @@ configure_requires:
     ExtUtils::MakeMaker:  0
 build_requires:
     ExtUtils::MakeMaker:  0
-requires:  {}
+requires:
+    sigtrap:  1
 resources:
     license:     http://dev.perl.org/licenses/
     repository:  http://github.com/rurban/Jit/
@@ -18,7 +19,7 @@ no_index:
     directory:
         - t
         - inc
-generated_by:       ExtUtils::MakeMaker version 6.5601
+generated_by:       ExtUtils::MakeMaker version 6.56
 meta-spec:
     url:      http://module-build.sourceforge.net/META-spec-v1.4.html
     version:  1.4

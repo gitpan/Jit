@@ -1,5 +1,5 @@
 This file contains message digests of all files listed in MANIFEST,
-signed via the Module::Signature module, version 0.61.
+signed via the Module::Signature module, version 0.64.
 
 To verify the content in this distribution, first make sure you have
 Module::Signature installed, then type:
@@ -15,26 +15,29 @@ not run its Makefile.PL or Build.PL.
 Hash: SHA1
 
 SHA1 f8efb56e782f42ad82618106f628e853c0e37b33 .gdbinit
-SHA1 7c29c69b6df5381386ffb062bcc72b7f94364a7c 3-jit-hand.S
-SHA1 e13acd71cb85f9693068394bf20fdc12c4a1e1db 3-jit.c
-SHA1 12a652c39a8e11e84fc08323ce8ede5310125bf5 Changes
-SHA1 3bc46ba04557baa212d57d06100edaeb45392d92 Jit-nt.xs.README
-SHA1 9c9d313d32e222fca4a6924d63a1408ad78b1349 Jit.xs
-SHA1 3d9b9e981592ed36a950fb0fc3f24c393d86365a MANIFEST
-SHA1 8b1a380eafce51af9e72a90115959ec4976ce28d META.yml
-SHA1 c3d20041e3436b92df356a457c2973e8ea2e92fd Makefile.PL
+SHA1 490081ac33392c48975857869f1296f0d82a10e2 Changes
+SHA1 3d6af2e36cde34efb35638bb0ce3e113ba309244 Jit.xs
+SHA1 ec9093ddcb8d9df39fbfc8a22791674da2664ab2 MANIFEST
+SHA1 5af4773af6372c96824a3df35745b492e7d7077a META.yml
+SHA1 68201cc1a076e3a598a4096fe62d478e350d577a Makefile.PL
 SHA1 31efdb74874fb106f54f03eb83563552aca89aeb README
-SHA1 75a1ae979e2160afa88318e31d7e11ab33523991 cc_main.c
-SHA1 816aafe80dcebe40af6be4f4584ca7fc1c4abb69 cc_main_nt.c
+SHA1 7527ddda0762c33d9829c11d9153e6ece37ee4b1 amd64.c
+SHA1 b83406f584cbfb08202e784d57960a96304df813 amd64thr.c
 SHA1 b8b5b67a6c67a9f8fd08494981fade89f46676b1 disfunc
-SHA1 f94f837317d27c4b9bd0955e0cf6806b7db2e54e lib/Jit.pm
-SHA1 28504db136efe48b8406cff958177bceedf7ed5b t/1.t
-SHA1 9b877cbf58f6fbb983085bf554a69ff11745caa8 t/2.t
-SHA1 1f22d26c5c131244ed6c8f45efb6d0c4df7b630e t/3.t
+SHA1 7c29c69b6df5381386ffb062bcc72b7f94364a7c help/3-jit-hand.S
+SHA1 e13acd71cb85f9693068394bf20fdc12c4a1e1db help/3-jit.c
+SHA1 75a1ae979e2160afa88318e31d7e11ab33523991 help/cc_main.c
+SHA1 cd1c2f964d73e447b0e48e4e2d3b121dfdfc6d9e help/cc_main_nt.c
+SHA1 c0a8a2ceaf738df97b4421314cf9fba99a11d1dc i386.c
+SHA1 3b46c67c8cede73e7dbe36f9fd488a75446d4e21 i386thr.c
+SHA1 af16026d0700f1d1697867c1b13e291a26e0da23 lib/Jit.pm
+SHA1 8e0b822d9e99f88749de5cdf09d67c504b0ab7a2 t/1.t
+SHA1 95dc3f2bce4f0af8306829c6df0098eb2982c538 t/2.t
+SHA1 f76315c7f7116594bd97febeb759f7b055e061cb t/3.t
 -----BEGIN PGP SIGNATURE-----
-Version: GnuPG v1.4.9 (Cygwin)
+Version: GnuPG v1.4.10 (GNU/Linux)
 
-iEYEARECAAYFAkxnskQACgkQmm2SYo/9yUKXcACdGW+mXPGyeNQNBxlETWFcaoKp
-5nAAn3IH6MnPcD6CIOX0o2cETmOE2Cb5
-=UfLQ
+iEYEARECAAYFAkx5FTsACgkQmm2SYo/9yUL/7wCeMLnpyrf98I12LLzVZtYMqFTB
+rlcAn2bYMsB8oOaCCqEKALGymqvil16p
+=B3r4
 -----END PGP SIGNATURE-----
