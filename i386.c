@@ -33,7 +33,7 @@ T_CHARARR x86_prolog[] = {
     push_ebx,		/* &PL_op  */
     push_ecx,		/* &PL_sig_pending */
     sub_x_esp(8),	/* room for 2 locals: &PL_sig_pending and op */
-    mov_mem_rebx(0)    	/* &PL_op to ebx */
+    mov_mem_ebx(0)    	/* &PL_op to ebx */
 #ifdef HAVE_DISPATCH
     ,mov_mem_4ebp(0)    /* &PL_sig_pending to -4(%ebp) */
 #endif
@@ -46,7 +46,7 @@ unsigned char * push_prolog(unsigned char *code) {
         push_ebx,	/* &PL_op */
         push_ecx,	/* &PL_sig_pending */
         sub_x_esp(8),
-        mov_mem_rebx(&PL_op)
+        mov_mem_ebx(&PL_op)
 #ifdef HAVE_DISPATCH
 	,mov_mem_4ebp(&PL_sig_pending)
 #endif
@@ -79,16 +79,27 @@ T_CHARARR x86_dispatch[] = {
 /* &Perl_despatch_signals relative */
 T_CHARARR x86_dispatch_post[] = {}; /* fails with msvc */
 
+/* XXX TODO */
 T_CHARARR maybranch_plop[] = {
-    mov_mem_rebx(0),
+    mov_mem_ebx(0),
     mov_eax_8ebp
 };
 unsigned char *
 push_maybranch_plop(unsigned char *code) {
     unsigned char maybranch_plop[] = {
-	mov_mem_rebx(&PL_op),
+	mov_mem_ebx(&PL_op),
 	mov_eax_8ebp};
     PUSHc(maybranch_plop);
+    return code;
+}
+T_CHARARR gotorel[] = {
+	jmp(0)
+};
+unsigned char *
+push_gotorel(unsigned char *code, int label) {
+    unsigned char gotorel[] = {
+	jmp(label)};
+    PUSHc(gotorel);
     return code;
 }
 
@@ -101,6 +112,8 @@ push_maybranch_plop(unsigned char *code) {
 # define DISPATCH_GETSIG x86_dispatch_getsig
 # define DISPATCH       x86_dispatch
 # define DISPATCH_POST  x86_dispatch_post
+# define MAYBRANCH_PLOP maybranch_plop
+# define GOTOREL        gotorel
 
 
 /*

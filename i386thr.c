@@ -47,10 +47,10 @@ epilog after final Perl_despatch_signals
     push_esi,						\
     push_ebx,		/* &my_perl */			\
     push_ecx,						\
-    sub_x_esp(8)	/* room for 2 locals: op, p */ 	\
-    /*mov_eax_ebx*/
+    sub_x_esp(8),	/* room for 2 locals: op, p */ 	\
+    mov_rebp_ebx(8)     /* mov 0x8(%ebp),%ebx my_perl */
 
-static unsigned x86thr_prolog[] = { X86THR_PROLOG };
+T_CHARARR x86thr_prolog[] = { X86THR_PROLOG };
 unsigned char *push_prolog(unsigned char *code) {
     PUSHc(x86thr_prolog);
     return code;
@@ -92,16 +92,27 @@ T_CHARARR x86thr_dispatch_post[] = {
     0x53,0x90
 };
 
+/* XXX TODO */
 T_CHARARR maybranch_plop[] = {
-    mov_mem_rebx(0),
+    mov_mem_ebx(0),
     mov_eax_8ebp
 };
 unsigned char *
 push_maybranch_plop(unsigned char *code) {
     unsigned char maybranch_plop[] = {
-	mov_mem_rebx(&PL_op),
+	mov_mem_ebx(&PL_op),
 	mov_eax_8ebp};
     PUSHc(maybranch_plop);
+    return code;
+}
+T_CHARARR gotorel[] = {
+	jmp(0)
+};
+unsigned char *
+push_gotorel(unsigned char *code, int label) {
+    unsigned char gotorel[] = {
+	jmp(label)};
+    PUSHc(gotorel);
     return code;
 }
 
@@ -113,6 +124,8 @@ push_maybranch_plop(unsigned char *code) {
 # define DISPATCH       x86thr_dispatch
 # define DISPATCH_POST  x86thr_dispatch_post
 # define EPILOG         x86thr_epilog
+# define MAYBRANCH_PLOP maybranch_plop
+# define GOTOREL        gotorel
 
 /*
  * Local variables:

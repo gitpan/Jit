@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Jit
-version:            0.0302
+version:            0.04
 abstract:           ~
 author:
     - Reini Urban <perl-compiler@googlegroups.com>
