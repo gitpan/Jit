@@ -1,6 +1,8 @@
 amd64.c
 amd64thr.c
+Artistic
 Changes
+Copying
 disfunc
 .gdbinit
 help/3-jit.c
@@ -17,4 +19,5 @@ README
 t/1.t
 t/2.t
 t/3.t
+t/bench.pl
 META.yml                                 Module meta-data (added by MakeMaker)
