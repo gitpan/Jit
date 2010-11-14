@@ -3,8 +3,8 @@
  *    JIT (Just-in-time compile) the Perl5 runloop.
  *    Currently for x86 32bit, amd64 64bit. More CPU's later.
  *    Status:
- *      Works only for simple i386 and amd64, 
- *      without PERL_ASYNC_CHECK
+ *      Works only for simple i386 and amd64 (amd64 threaded fails), 
+ *      without PERL_ASYNC_CHECK,
  *      without maybranch ops (return op_other, op_last, ... ignored)
  *
  *    Copyright (C) 2010 by Reini Urban
@@ -43,14 +43,13 @@ long jit_chain(pTHX_ OP* op, unsigned char *code, unsigned char *code_start
 #endif
               );
 
-
 /* When do we need PERL_ASYNC_CHECK?
  * Until 5.13.2 we had it after each and every op,
  * since 5.13.2 only inside certain ops,
  * which need to handle pending signals.
  * In 5.6 it was a NOOP.
  */
-#define BYPASS_DISPATCH_NEEDED /* not tested yet */
+#define BYPASS_DISPATCH /* not tested yet */
 #if (PERL_VERSION > 6) && (PERL_VERSION < 13)
 #define HAVE_DISPATCH
 #define DISPATCH_NEEDED(op) dispatch_needed(op)
@@ -130,7 +129,113 @@ threaded, same logic as above, just:
 /* force 4 byte for U32, 64bit uses 8 byte for U32, but 4 byte for call near */
 #define PUSHcall(what) memcpy(code,&what,CALL_SIZE); code += CALL_SIZE
 
-#if (defined(__i386__) || defined(_M_IX86))
+/* __amd64 defines __x86_64 */
+#if defined(__x86_64__) || defined(__amd64) || defined(__amd64__) || defined(_M_X64)
+#define JIT_CPU "amd64"
+#define JIT_CPU_AMD64
+#define CALL_ALIGN 0
+#define MOV_REL
+#define PUSH_SIZE  4				/* size for the push instruction arg 4/8 */
+
+#define PUSHabs(what) memcpy(code,what,PUSH_SIZE); code += PUSH_SIZE
+#define PUSHrel(where) { \
+    U32 r = (unsigned char*)where - (code+MOV_SIZE);	\
+    memcpy(code,&r,MOV_SIZE); code += MOV_SIZE; \
+}
+/*void f_PUSHrel(unsigned char* code, void *where);*/
+/*#define PUSHrel(where) f_PUSHrel(code,(void*)where); code += MOV_SIZE;*/
+#define revword(m)	(((unsigned long)m)&0xff),((((unsigned long)m)&0xff00)>>8), \
+        ((((unsigned long)m)&0xff0000)>>16),((((unsigned long)m)&0xff000000)>>24), \
+        ((((unsigned long)m)&0xff00000000)>>32),((((unsigned long)m)&0xff00000000)>>40), \
+        ((((unsigned long)m)&0xff0000000000)>>48),((((unsigned long)m)&0xff0000000000)>>56)
+#define revword4(m)	(((unsigned int)m)&0xff),((((unsigned int)m)&0xff00)>>8), \
+        ((((unsigned int)m)&0xff0000)>>16),((((unsigned int)m)&0xff000000)>>24)
+
+T_CHARARR NOP[]      = {0x90};    /* nop */
+
+/* PROLOG */
+#define enter           0xc8
+#define push_rbp    	0x55
+#define mov_rsp_rbp 	0x48,0x89,0xe5
+#define push_r12 	0x41,0x54
+#define push_rbx 	0x53
+#define push_rcx	0x51
+#define sub_x_rsp(byte) 0x48,0x83,0xec,byte
+#define add_x_esp(byte) 0x48,0x83,0xc4,byte
+#define fourbyte        0x00,0x00,0x00,0x00
+#define mov_mem_eax(m)	0xa1,revword(m)
+/* mov    $memabs,(%ebx) &PL_op in ebx */
+#define mov_mem_rbx     0x48,0x8b,0x1d /* mov &PL_op,%rbx */
+#define mov_rebp_ebx(byte) 0x8b,0x5d,byte  /* mov 0x8(%ebp),%ebx*/
+#define mov_rrsp_rbx    0x48,0x8b,0x1c,0x24    /* mov    (%rsp),%rbx ; my_perl from stack to rbx */
+
+#define push_imm_0	0x68
+#define push_imm(m)	0x68,revword(m)
+/* gcc __fastcall amd64 convention for param 1-2 passing */
+#define mov_mem_esi     0xbe		/* arg2 */
+#define mov_mem_edi     0xbf		/* arg1 */
+#define mov_mem_ecx	0xb9      	/* arg1 */
+#ifndef _WIN64
+#define push_arg1_mem   mov_mem_edi	/* if call via register */
+#define push_arg2_mem   mov_mem_esi
+#else
+/* Win64 Visual C __fastcall uses rcx,rdx for the first int args, not rdi,rsi
+   We use less than 2GB for our vars and subs.
+ */
+#define mov_mem_edx     0xba		/* arg2 */
+#define push_arg1_mem   mov_mem_ecx	/* if call via register */
+#define push_arg2_mem   mov_mem_edx
+#endif
+
+#ifndef _WIN64
+#define mov_rbx_arg1   0x48,0x89,0xdf /* my_perl => arg1 in rdi */
+#else
+#define mov_rbx_arg1   0x48,0x89,0xdf /* my_perl => arg1 in rcx */
+#endif
+#define mov_rebx_mem    0x48,0x89,0x1d /* movq (%ebx), &PL_op */
+#define mov_mem_rebx	0x48,0xc7,0x03 /* movq &PL_op, (%ebx) */
+#define mov_eax_rebx	0x89,0x03      /* movq %rax,(%rbx) &PL_op in ebx */
+/* &PL_op in -4(%ebp) */
+/* #define mov_mem_4ebp	0xc7,0x45,0xfc */
+#define mov_eax_4ebp 	0x89,0x45,0xfc
+
+/* EPILOG */
+#define pop_rcx 	0x59
+#define pop_rbx 	0x5b
+#define pop_r12    	0x41,0x5c
+#define leave 		0xc9
+#define ret 		0xc3
+
+/* maybranch: */
+/* &op in -8(%ebp) */
+#define mov_eax_8ebp 	0x89,0x45,0xf8
+#define cltq 		0x48,0x98
+#define mov_0_rax	0xb8,0x00,0x00,0x00,0x00
+
+#define call 		0xe8	    /* + 4 rel */
+#define ljmp(abs) 	0xff,0x25   /* + 4 memabs */
+#define jmp(byte)       0x3b,(byte) /* maybranch, untested */
+/* mov    %rax,(%rbx) &PL_op in ebx */
+#define mov_rax_memr    0x48,0x89,0x05 /* + 4 rel */
+#define mov_eax_rebx    0x89,0x03
+
+#define mov_4ebp_edx    0x8b,0x55,0xfc
+#define mov_reax_ebx    0x48,0x8b,0x18
+#define mov_redx_eax    0x82,0x02
+#define test_eax_eax    0x85,0xc0
+#define je(byte)        0x74,(byte)
+/* skip call	_Perl_despatch_signals */
+#define je_5            0x74,0x05
+
+#ifdef USE_ITHREADS
+# include "amd64thr.c"
+#else
+# include "amd64.c"
+#endif
+
+#endif
+
+#if !defined(JIT_CPU) && (defined(__i386__) || defined(__i386) || defined(_M_IX86))
 #define JIT_CPU "i386"
 #define JIT_CPU_X86
 #define CALL_ALIGN 4
@@ -204,102 +309,14 @@ T_CHARARR NOP[]      = {0x90};    /* nop */
 #endif
 #endif
 
-/* __amd64 defines __x86_64 */
-#if (defined(__x86_64__) || defined(__amd64))
-#define JIT_CPU "amd64"
-#define JIT_CPU_AMD64
-#define CALL_ALIGN 0
-#define MOV_REL
-#define PUSH_SIZE  4				/* size for the push instruction arg 4/8 */
-
-#define PUSHabs(what) memcpy(code,what,PUSH_SIZE); code += PUSH_SIZE
-#define PUSHrel(where) { \
-    U32 r = (unsigned char*)where - (code+MOV_SIZE);	\
-    memcpy(code,&r,MOV_SIZE); code += MOV_SIZE; \
-}
-/*void f_PUSHrel(unsigned char* code, void *where);*/
-/*#define PUSHrel(where) f_PUSHrel(code,(void*)where); code += MOV_SIZE;*/
-#define revword(m)	(((unsigned long)m)&0xff),((((unsigned long)m)&0xff00)>>8), \
-        ((((unsigned long)m)&0xff0000)>>16),((((unsigned long)m)&0xff000000)>>24), \
-        ((((unsigned long)m)&0xff00000000)>>32),((((unsigned long)m)&0xff00000000)>>40), \
-        ((((unsigned long)m)&0xff0000000000)>>48),((((unsigned long)m)&0xff0000000000)>>56)
-#define revword4(m)	(((unsigned int)m)&0xff),((((unsigned int)m)&0xff00)>>8), \
-        ((((unsigned int)m)&0xff0000)>>16),((((unsigned int)m)&0xff000000)>>24)
-
-T_CHARARR NOP[]      = {0x90};    /* nop */
-
-/* PROLOG */
-#define enter           0xc8
-#define push_rbp    	0x55
-#define mov_rsp_rbp 	0x48,0x89,0xe5
-#define push_r12 	0x41,0x54
-#define push_rbx 	0x53
-#define push_rcx	0x51
-#define sub_x_rsp(byte) 0x48,0x83,0xec,byte
-#define add_x_esp(byte) 0x48,0x83,0xc4,byte
-#define fourbyte        0x00,0x00,0x00,0x00
-#define mov_mem_eax(m)	0xa1,revword(m)
-/* mov    $memabs,(%ebx) &PL_op in ebx */
-#define mov_mem_rbx     0x48,0x8b,0x1d /* mov &PL_op,%rbx */
-#define mov_mem_ecx	0x8b,0x0d      /* &PL_sig_pending */
-#define mov_rebp_ebx(byte) 0x8b,0x5d,byte  /* mov 0x8(%ebp),%ebx*/
-#define mov_rrsp_rbx    0x48,0x8b,0x1c,0x24    /* mov    (%rsp),%rbx ; my_perl from stack to rbx */
-
-#define push_imm_0	0x68
-#define push_imm(m)	0x68,revword(m)
-#define mom_mem_esi     0xbe		/* arg2 */
-#define mom_mem_edi     0xbf		/* arg1 */
-#define push_arg1_mem   mom_mem_edi	/* if call via register */
-#define push_arg2_mem   mom_mem_esi
-
-#define mov_rbx_rdi     0x48,0x89,0xdf /* my_perl => arg1 */
-#define mov_rebx_mem    0x48,0x89,0x1d /* movq (%ebx), &PL_op */
-#define mov_mem_rebx	0x48,0xc7,0x03 /* movq &PL_op, (%ebx) */
-#define mov_eax_rebx	0x89,0x03      /* movq %rax,(%rbx) &PL_op in ebx */
-/* &PL_op in -4(%ebp) */
-/* #define mov_mem_4ebp	0xc7,0x45,0xfc */
-#define mov_eax_4ebp 	0x89,0x45,0xfc
-
-/* EPILOG */
-#define pop_rcx 	0x59
-#define pop_rbx 	0x5b
-#define pop_r12    	0x41,0x5c
-#define leave 		0xc9
-#define ret 		0xc3
-
-/* maybranch: */
-/* &op in -8(%ebp) */
-#define mov_eax_8ebp 	0x89,0x45,0xf8
-#define cltq 		0x48,0x98
-#define mov_0_rax	0xb8,0x00,0x00,0x00,0x00
-
-#define call 		0xe8	    /* + 4 rel */
-#define ljmp(abs) 	0xff,0x25   /* + 4 memabs */
-#define jmp(byte)       0x3b,(byte) /* maybranch, untested */
-/* mov    %rax,(%rbx) &PL_op in ebx */
-#define mov_rax_memr    0x48,0x89,0x05 /* + 4 rel */
-#define mov_eax_rebx    0x89,0x03
-
-#define mov_4ebp_edx    0x8b,0x55,0xfc
-#define mov_reax_ebx    0x48,0x8b,0x18
-#define mov_redx_eax    0x82,0x02
-#define test_eax_eax    0x85,0xc0
-#define je(byte)        0x74,(byte)
-/* skip call	_Perl_despatch_signals */
-#define je_5            0x74,0x05
-
-#ifdef USE_ITHREADS
-# include "amd64thr.c"
-#else
-# include "amd64.c"
+#if defined(__ia64__) || defined(__ia64) || defined(_M_IA64)
+#error "IA64 not supported so far"
 #endif
-
-/*
-void f_PUSHrel(unsigned char* code, void *where) {
-    U32 r = (unsigned char*)where - (code+MOV_SIZE);
-    memcpy(code,&r,MOV_SIZE); 
-}
-*/
+#if defined(__sparcv9)
+#error "SPARC V9 not supported so far"
+#endif
+#if defined(__arm__)
+#error "ARM or THUMB not supported so far"
 #endif
 
 #ifndef JIT_CPU
@@ -343,7 +360,7 @@ mytime() {
 
 int
 dispatch_needed(OP* op) {
-#ifdef BYPASS_DISPATCH_NEEDED
+#ifdef BYPASS_DISPATCH
     return 0; 			/* for TESTING only */
 #endif
     switch (op->op_type) {	/* sync this list with B::CC */
@@ -602,7 +619,7 @@ jit_chain(pTHX_
 		PUSHc(DISPATCH);
 		PUSHrel(&Perl_despatch_signals);
 	    }
-# ifdef USE_ITHREADS
+# if defined(USE_ITHREADS) && defined(DISPATCH_POST)
 	    if (dryrun) {
 		size += sizeof(DISPATCH_POST);
 	    } else {
@@ -843,6 +860,13 @@ Perl_runops_jit(pTHX)
     PUSHc(EPILOG);
     while (((unsigned int)&code | 0xfffffff0) % 4) { *(code++) = NOP[0]; }
 
+#ifdef PROFILING
+    if (profiling) {
+        printf("jit pass 2:\t%0.12f\n", mytime() - bench);
+        bench = mytime();
+    }
+#endif
+
 #ifdef DEBUGGING
     fprintf(fh, "}\n");
     line++;
@@ -873,23 +897,42 @@ Perl_runops_jit(pTHX)
     /* XXX Missing. Prepare for execution: flush CPU cache. Needed only on ppc32 and ppc64 */
 
     /* gdb: disassemble code code+200 */
-#ifdef DEBUGGING
-    DEBUG_v( printf("# &PL_op   \t= 0x%x / *0x%x\n",&PL_op, PL_op) );
+#if defined(DEBUGGING) && defined(DEBUG_v_TEST)
+    if (DEBUG_v_TEST) {
+        DEBUG_v( printf("# &PL_op   \t= 0x%x / *0x%x\n",&PL_op, PL_op) );
 #ifdef USE_ITHREADS
-    DEBUG_v( printf("# &my_perl \t= 0x%x / *0x%x\n",&my_perl, my_perl) );
+        DEBUG_v( printf("# &my_perl \t= 0x%x / *0x%x\n",&my_perl, my_perl) );
 #endif
-    DEBUG_v( printf("# code() 0x%x size %d",code,size) );
-    for (i=0; i < size; i++) {
-        if (!(i % 8)) DEBUG_v( printf("\n#(code+%3d): ", i) );
-        DEBUG_v( printf("%02x ",code[i]) );
+        DEBUG_v( printf("# code() 0x%x size %d",code,size) );
+        for (i=0; i < size; i++) {
+            if (!(i % 8)) DEBUG_v( printf("\n#(code+%3d): ", i) );
+            DEBUG_v( printf("%02x ",code[i]) );
+        }
+        DEBUG_v( printf("\n# runops_jit_%d\n", global_loops-1) );
     }
-    DEBUG_v( printf("\n# runops_jit_%d\n", global_loops-1) );
+
+    /* How to disassemble per command line:
+       echo "55 89 e5 53 51 83 ec 08" |xxd -r -p - > xx
+       objdump -D --target=binary --architecture i386:intel xx
+
+   0:   55                      push   ebp
+   1:   89 e5                   mov    ebp,esp
+   3:   53                      push   ebx
+   4:   51                      push   ecx
+   5:   83 ec 08                sub    esp,0x8
+
+     */
+    if (DEBUG_v_TEST) {
+        fh = fopen("run-jit.bin", "w");
+        fwrite(code,size,1,fh);
+        fclose(fh);
+        system("objdump -D --target=binary --architecture i386"
+#ifdef JIT_CPU_AMD64
+               ":x86-64"
 #endif
-#ifdef PROFILING
-    if (profiling) {
-        printf("jit pass 2:\t%0.12f\n", mytime() - bench);
-        bench = mytime();
+               " run-jit.bin");
     }
+
 #endif
 
 /*================= Jit.xs:859 runops_jit_0 == disassemble code code+40 =====*/
