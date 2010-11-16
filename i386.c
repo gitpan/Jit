@@ -1,5 +1,5 @@
 /*
-x86 not-threaded, PL_op in eax, PL_sig_pending temp in ecx
+x86 not-threaded, PL_op in ebx, PL_sig_pending temp in ecx
 
 prolog:
 	55                   	push   %ebp
@@ -16,6 +16,10 @@ dispatch:
 	74 06                	je     +5
 	e8 xx xx xx xx          call   *Perl_despatch_signals #relative
 
+maybranch:
+	mov 4(%ebx),%edx	; save op->next
+
+
 
 
 epilog:
@@ -30,12 +34,12 @@ epilog:
 T_CHARARR x86_prolog[] = {
     push_ebp,		/* save frame pointer */	
     mov_esp_ebp,	/* set new frame pointer */
-    push_ebx,		/* &PL_op  */
-    push_ecx,
+    push_ebx,		
+    push_ecx,		/* temp op->next */
     sub_x_esp(8),
-    mov_mem_ebx(0)
+    mov_mem_ebx(0)	/* &PL_op  */
 #ifdef HAVE_DISPATCH
-    ,mov_mem_4ebp(0)
+    ,mov_mem_4ebp(0)	/* &PL_sig_pending */
 #endif
 };
 
@@ -71,37 +75,11 @@ T_CHARARR x86_save_plop[]  = {
     mov_eax_rebx			/* &PL_op in %ebx */
 };
 T_CHARARR x86_dispatch[] = {
-    mov_4ebp_edx,
+    mov_4ebp_edx,	/* value of PL_sig_pending from 4(%ebp) (ptr) to %eax */
     mov_redx_eax,
     test_eax_eax,
     je(5)  		/* je     +5 */
 };      		/* call   Perl_despatch_signals */
-/* &Perl_despatch_signals relative */
-
-/* XXX TODO */
-T_CHARARR maybranch_plop[] = {
-    mov_mem_ebx(0),
-    mov_eax_8ebp
-};
-unsigned char *
-push_maybranch_plop(unsigned char *code) {
-    unsigned char maybranch_plop[] = {
-	mov_mem_ebx(&PL_op),
-	mov_eax_8ebp};
-    PUSHc(maybranch_plop);
-    return code;
-}
-T_CHARARR gotorel[] = {
-	jmp(0)
-};
-unsigned char *
-push_gotorel(unsigned char *code, int label) {
-    unsigned char gotorel[] = {
-	jmp(label)};
-    PUSHc(gotorel);
-    return code;
-}
-
 
 # define PROLOG 	x86_prolog
 # define EPILOG         x86_epilog
@@ -109,9 +87,6 @@ push_gotorel(unsigned char *code, int label) {
 # define JMP	 	x86_jmp
 # define SAVE_PLOP	x86_save_plop
 # define DISPATCH       x86_dispatch
-# define MAYBRANCH_PLOP maybranch_plop
-# define GOTOREL        gotorel
-
 
 /*
  * Local variables:

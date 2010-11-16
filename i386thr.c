@@ -39,20 +39,35 @@ epilog after final Perl_despatch_signals
 	c3                   	ret
 */
 
-/* my_perl already on stack, Iop at 4(%ebx),  */
-#define X86THR_PROLOG					\
-    push_ebp,		/* save frame pointer*/		\
-    mov_esp_ebp,	/* set new frame pointer */ 	\
-    push_edi,						\
-    push_esi,						\
-    push_ebx,		/* &my_perl */			\
-    push_ecx,						\
-    sub_x_esp(8),	/* room for 2 locals: op, p */ 	\
+/* my_perl already on stack, Iop at 4(%ebx) */
+T_CHARARR x86thr_prolog[] = { 
+    push_ebp,		/* save frame pointer*/
+    mov_esp_ebp,	/* set new frame pointer */
+    push_edi,                                  
+    push_esi,                                  
+    push_ebx,		/* &my_perl */     
+    push_ecx,                                  
+    sub_x_esp(8),       /* room for 2 locals: op, p */
     mov_rebp_ebx(8)     /* mov 0x8(%ebp),%ebx my_perl */
-
-T_CHARARR x86thr_prolog[] = { X86THR_PROLOG };
+#ifdef HAVE_DISPATCH
+    ,mov_mem_4ebp(0)
+#endif
+};
 unsigned char *push_prolog(unsigned char *code) {
-    PUSHc(x86thr_prolog);
+    unsigned char prolog[] = {
+        push_ebp,		/* save frame pointer*/
+        mov_esp_ebp,	/* set new frame pointer */
+        push_edi,                                  
+        push_esi,                                  
+        push_ebx,		/* &my_perl */     
+        push_ecx,                                  
+        sub_x_esp(8),	     /* room for 2 locals: op, p */
+        mov_rebp_ebx(8)    /* mov 0x8(%ebp),%ebx my_perl */
+#ifdef HAVE_DISPATCH
+        ,mov_mem_4ebp(&PL_sig_pending)
+#endif
+    };
+    PUSHc(prolog);
     return code;
 }
 
@@ -76,56 +91,19 @@ T_CHARARR x86thr_save_plop[] = {
     0x89,0x43,0x04	/* mov    %eax,0x4(%ebx) */
 }; /* save new PL_op into my_perl */
 T_CHARARR x86_nop[]          = {0x90};         /* pad */
-/* T_CHARARR x86thr_dispatch_getsig[] = {}; */ /* empty decl fails with msvc */
 T_CHARARR x86thr_dispatch[] = {
-    0x89,0x1e,0x89,0x46,
-    0x04,0x8b,0x86,0x84,
-    0x03,0x00,0x00,0x85,
-    0xC0,0x74,0x08,0x89,
-    0x34,0x24,0xFF,0x25
-}; /* check and call $Perl_despatch_signals */
-/* after calling Perl_despatch_signals, restore my_perl into ebx and push for next.
-   restore my_perl into ebx and push */
-T_CHARARR x86thr_dispatch_post[] = {
-    0x83,0xc4,0x10,0x83,
-    0xec,0x0c,0x31,0xdb,
-    0x53,0x90
-};
-
-/* XXX TODO */
-T_CHARARR maybranch_plop[] = {
-    mov_mem_ebx(0),
-    mov_eax_8ebp
-};
-unsigned char *
-push_maybranch_plop(unsigned char *code) {
-    unsigned char maybranch_plop[] = {
-	mov_mem_ebx(&PL_op),
-	mov_eax_8ebp};
-    PUSHc(maybranch_plop);
-    return code;
-}
-T_CHARARR gotorel[] = {
-	jmp(0)
-};
-unsigned char *
-push_gotorel(unsigned char *code, int label) {
-    unsigned char gotorel[] = {
-	jmp(label)};
-    PUSHc(gotorel);
-    return code;
-}
+    mov_4ebp_edx,	/* value of PL_sig_pending from 4(%ebp) (ptr) to %eax */
+    mov_redx_eax,
+    test_eax_eax,
+    je(8)  		/* je     +8 */
+}; /* call   Perl_despatch_signals */
 
 # define PROLOG 	x86thr_prolog
 # define CALL	 	x86thr_call
 # define JMP	 	x86thr_call
 # define SAVE_PLOP	x86thr_save_plop
-# define DISPATCH_GETSIG x86thr_dispatch_getsig
 # define DISPATCH       x86thr_dispatch
-# define DISPATCH_POST  x86thr_dispatch_post
 # define EPILOG         x86thr_epilog
-# define MAYBRANCH_PLOP maybranch_plop
-# define GOTOREL        gotorel
 
 /*
  * Local variables:

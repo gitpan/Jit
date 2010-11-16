@@ -68,12 +68,15 @@ Dump of assembler code from 0x1127000 to 0x1127058:
 T_CHARARR amd64_prolog[] = {
     push_rbp,
     mov_rsp_rbp,
-    push_rbx, 		/* &PL_op */
-    sub_x_rsp(8),
-    mov_mem_rbx, fourbyte
+    /*push_rbx,*/
+#ifdef HAVE_DISPATCH
+    push_rcx,
+#endif
+    push_r12, 		/* op->next */
+    sub_x_rsp(8)/*,
+    mov_mem_rbx, fourbyte*/
 #ifdef HAVE_DISPATCH	/* &PL_sig_pending */
-    ,push_rcx,
-    mov_mem_ecx, fourbyte
+    ,mov_mem_ecx, fourbyte
 #endif
 };
 
@@ -81,15 +84,18 @@ unsigned char *push_prolog(unsigned char *code) {
     T_CHARARR prolog1[] = {
 	push_rbp,
         mov_rsp_rbp,
-	push_rbx, 	/* for &PL_op */
-	sub_x_rsp(8),
-	mov_mem_rbx
+	/*push_rbx,*/
+#ifdef HAVE_DISPATCH
+	push_rcx,
+#endif
+        push_r12,
+	sub_x_rsp(8)/*,
+        mov_mem_rbx*/
     };
     PUSHc(prolog1);
-    PUSHrel(&PL_op);
+    /*PUSHrel(&PL_op);*/
 #ifdef HAVE_DISPATCH
     T_CHARARR prolog2[] = {
-	push_rcx, 
 	mov_mem_ecx};
     PUSHc(prolog2);
     PUSHrel(&PL_sig_pending);
@@ -97,11 +103,12 @@ unsigned char *push_prolog(unsigned char *code) {
     return code;
 }
 T_CHARARR amd64_epilog[] = {
+    add_x_esp(8),
+    pop_r12,
 #ifdef HAVE_DISPATCH
     pop_rcx,
 #endif
-    pop_rbx,
-    add_x_esp(8),
+    /*pop_rbx,*/
     leave,
     ret};
 
@@ -115,36 +122,53 @@ T_CHARARR amd64_save_plop[]  = {
 };      
 T_CHARARR amd64_nop[]        = {0x90};      /* pad */
 T_CHARARR amd64_nop2[]       = {0x90,0x90};      /* jmp pad */
-T_CHARARR amd64_dispatch_getsig[] = {0x8b,0x0d};
+T_CHARARR amd64_dispatch_getsig[] = {
+    mov_mem_rcx};
 T_CHARARR amd64_dispatch[] = {
-    0x85,0xc9,0x74,0x06,
-    0xFF,0x25};
-/*T_CHARARR amd64_dispatch_post[] = {}; */ /* fails with msvc and sun cc */
+    test_ecx_ecx,
+    je(5)};
 
 T_CHARARR maybranch_plop[] = {
-    mov_mem_rebx, fourbyte,
-    mov_eax_8ebp
+    mov_mem_r12, fourbyte
+    /*,mov_eax_8ebp*/
 };
-unsigned char *push_maybranch_plop(unsigned char *code) {
+unsigned char *push_maybranch_plop(unsigned char *code, OP* next) {
     T_CHARARR maybranch_plop1[] = {
-	mov_mem_rebx
-    };
-    T_CHARARR maybranch_plop2[] = {
-	mov_eax_8ebp
-    };
+	mov_mem_r12};
+    /*T_CHARARR maybranch_plop2[] = {
+	mov_eax_8ebp};*/
     PUSHc(maybranch_plop1);
-    PUSHrel(&PL_op);
-    PUSHc(maybranch_plop2);
+    PUSHabs(next);
+    /*PUSHc(maybranch_plop2);*/
     return code;
 }
-T_CHARARR gotorel[] = {
-	jmp(0)
+T_CHARARR maybranch_check[] = {
+    cmp_rax_r12,
+    je(0)
 };
 unsigned char *
-push_gotorel(unsigned char *code, int label) {
+push_maybranch_check(unsigned char *code, int next) {
+    unsigned char maybranch_check[] = {
+	cmp_rax_r12,
+	je_0};
+    if (abs(next) > 128) {
+        printf("ERROR: je overflow %d > 128\n", next);
+    } else {
+        PUSHc(maybranch_check);
+        PUSHbyte(next);
+    }
+    return code;
+}
+
+T_CHARARR gotorel[] = {
+    0xe9, fourbyte
+};
+unsigned char *
+push_gotorel(unsigned char *code, U32 label) {
     unsigned char gotorel[] = {
-	jmp(label)};
+	0xe9};
     PUSHc(gotorel);
+    PUSHabs(&label);
     return code;
 }
 
@@ -155,7 +179,6 @@ push_gotorel(unsigned char *code, int label) {
 # define SAVE_PLOP	amd64_save_plop
 # define DISPATCH_GETSIG amd64_dispatch_getsig
 # define DISPATCH       amd64_dispatch
-/* # define DISPATCH_POST  amd64_dispatch_post */
 # define EPILOG         amd64_epilog
 # define MAYBRANCH_PLOP maybranch_plop
 # define GOTOREL        gotorel
