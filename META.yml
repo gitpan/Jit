@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Jit
-version:            0.04_05
+version:            0.04_06
 abstract:           Jit the perl5 runloop in proper execution order and near calls
 author:
     - Reini Urban <perl-compiler@googlegroups.com>
