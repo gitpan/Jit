@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Jit
-version:            0.04_07
+version:            0.04_08
 abstract:           Jit the perl5 runloop in proper execution order and near calls
 author:
     - Reini Urban <perl-compiler@googlegroups.com>
@@ -13,8 +13,9 @@ build_requires:
 requires:
     sigtrap:  1
 resources:
-    license:     http://dev.perl.org/licenses/
-    repository:  http://github.com/rurban/Jit/
+    license:      http://dev.perl.org/licenses/
+    MailingList:  http://groups.google.com/group/perl-compiler
+    repository:   http://github.com/rurban/Jit/
 no_index:
     directory:
         - t

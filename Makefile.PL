@@ -18,7 +18,7 @@ if ($^O eq 'darwin') {
 my $obj = $Config{obj_ext};
 sub check_cc {
   my $sym = shift;
-  open C, ">", "test.c";
+  open C, ">test.c"; #5.6.2: Too many arguments for open at Makefile.PL line 21, near ""test.c";"
   print C << "EOF";
 #include "EXTERN.h"
 #include "perl.h"
@@ -82,6 +82,9 @@ if ($^O ne 'MSWin32') {
     $ccflags .= " -DHAVE_POSIX_MEMALIGN";
   }
 }
+my $clean_t = File::Spec->catfile("t", "_t*.pl")." ";
+$clean_t .= File::Spec->catfile("help", "*.dis")." ";
+$clean_t .= File::Spec->catfile("help", "*".$Config{obj_ext})." ";
 
 WriteMakefile
  (
@@ -97,15 +100,18 @@ WriteMakefile
    ('META_MERGE'  => {
      resources =>
      {
-       license     => 'http://dev.perl.org/licenses/',
-       repository  => 'http://github.com/rurban/Jit/',
+       license      => 'http://dev.perl.org/licenses/',
+       repository   => 'http://github.com/rurban/Jit/',
+      'MailingList' => 'http://groups.google.com/group/perl-compiler',
      },
     }
    ) : ()),
   #SIGN  => 1,
   clean => { FILES =>
- 	       "*.core *.stackdump a.out *.exe *.dis *.s *.i *.obj *.o ".
-               "*.pdb *~ dll.base dll.exp *.err *.bak"
+             "*.core *.stackdump a.out run-jit.* *.i ".
+             "*".($Config{obj_ext} ? $Config{obj_ext} : ".o")." "
+             ."$clean_t *.err *.bak "
+             .($^O eq 'MSWin32' ? "*.exe  *.pdb *~ dll.base dll.exp " : "")
   },
  );
 

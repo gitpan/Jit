@@ -33,26 +33,36 @@ typedef unsigned char CODE;
 #define ALIGN_64(c) (c%64?(c+(64-c%64)):c) 
 #define ALIGN_N(n,c) (c%n?(c+(n-c%n)):c) 
 
+HV* otherops = NULL;
 typedef struct jmptarget {
     OP   *op;       /* the target op */
     char *label;    /* XXX not sure if need this */
-    CODE *labeltgt; /* the code points for the 4 targets: label (run-time lookup for goto XS and goto label) */
-    CODE *nextop;   /* and the 3 loop targets */
-    CODE *lastop;
-    CODE *redoop;
+    CODE *target;   /* the code points for label (run-time lookup for goto XS and goto label) */
 } JMPTGT;
 int jmpix = 0;
 JMPTGT *jmptargets = NULL;
+
+typedef struct loopstack {
+    CODE *nextop;   /* the 3 loop targets */
+    CODE *lastop;
+    CODE *redoop;
+} LOOPTGT;
+int loopix = 0;
+LOOPTGT *looptargets = NULL;
+
+#define PUSH_JMP(jmp)                                                  \
+    jmptargets = (JMPTGT*)realloc(jmptargets, (jmpix+1)*sizeof(JMPTGT)); \
+    memcpy(&jmptargets[jmpix], &jmp, sizeof(JMPTGT)); jmpix++
+#define POP_JMP 	(jmpix >= 0 ? &jmptargets[jmpix--] : NULL)
+#define PUSH_LOOP(cx)                                                  \
+    looptargets = (LOOPTGT*)realloc(looptargets, (loopix+1)*sizeof(LOOPTGT)); \
+    memcpy(&looptargets[loopix], &cx, sizeof(LOOPTGT)); loopix++
+#define POP_LOOP 	(loopix >= 0 ? &looptargets[loopix--] : NULL)
 
 #ifdef DEBUGGING
 int global_label;
 int global_loops = 0;
 #endif
-
-#define PUSH_JMP(jmp)                                                  \
-    jmptargets = (JMPTGT*)realloc(jmptargets, ++jmpix*sizeof(JMPTGT)); \
-    memcpy(&jmptargets[jmpix], jmp, sizeof(JMPTGT))
-#define POP_JMP 	(jmpix ? &jmptargets[--jmpix] : NULL)
 
 int dispatch_needed(OP* op);
 int maybranch(OP* op);
@@ -104,7 +114,7 @@ not-threaded:
   OP *op;
   int *p = &Perl_Isig_pending_ptr;
 if maybranch:
-  op = PL_op->next; 	     # save away at ecx to check
+  op = PL_op->op_next; 	     # save away at ecx to check
   PL_op = Perl_pp_opname();  # returns op_next, op_other, op_first, op_last 
 			     # or a new optree start
   if (dispatch_needed) 
@@ -212,6 +222,7 @@ T_CHARARR NOP[]      = {0x90};    /* nop */
 
 /* PROLOG */
 #define enter           0xc8
+#define enter_8         0xc8,0x08,0x00,0x00
 #define push_rbp    	0x55
 #define mov_rsp_rbp 	0x48,0x89,0xe5
 #define push_r12 	0x41,0x54
@@ -317,6 +328,7 @@ T_CHARARR NOP[]      = {0x90};    /* nop */
 T_CHARARR NOP[]      = {0x90};    /* nop */
 
 /* PROLOG */
+#define enter_8         0xc8,0x08,0x00,0x00
 #define push_ebp    	0x55
 #define mov_esp_ebp 	0x89,0xe5
 #define push_edi 	0x57
@@ -347,6 +359,7 @@ T_CHARARR NOP[]      = {0x90};    /* nop */
 #define je(byte) 	0x74,(byte)
 #define cmp_ecx_eax     0x39,0xc8
 #define mov_rebp_ebx(byte) 0x8b,0x5d,byte  /* mov 0x8(%ebp),%ebx*/
+#define test_eax_eax    0x85,0xc0
 
 /* EPILOG */
 #define add_x_esp(byte) 0x83,0xc4,byte	/* add    $0x4,%esp */
@@ -374,7 +387,7 @@ T_CHARARR NOP[]      = {0x90};    /* nop */
 # include "i386.c"
 #endif
 
-/* cmp returned op == op->next => jmp */
+/* save op = op->next */
 T_CHARARR maybranch_plop[] = {
     mov_mem_ecx(0)
 };
@@ -383,7 +396,7 @@ push_maybranch_plop(CODE *code, OP* next) {
     CODE maybranch_plop[] = {
 	mov_mem_ecx_0};
     PUSHc(maybranch_plop);
-    PUSHrel(next);
+    PUSHrel(&next);
     return code;
 }
 T_CHARARR maybranch_check[] = {
@@ -414,10 +427,18 @@ push_gotorel(CODE *code, int label) {
     PUSHc(gotorel);
     return code;
 }
+
 # define MAYBRANCH_PLOP maybranch_plop
 # define GOTOREL        gotorel
 
 #endif /* EOF i386 */
+
+#if defined(JIT_CPU_X86) || defined(JIT_CPU_AMD64)
+T_CHARARR ifop0return[] = {
+    test_eax_eax,
+    je(sizeof(EPILOG)),
+};
+#endif
 
 #if defined(__ia64__) || defined(__ia64) || defined(_M_IA64)
 #error "IA64 not supported so far"
@@ -568,12 +589,12 @@ call_abs (CODE *code, void *addr) {
     return code;
 }
 
-/* XXX TODO Search dynamically the code target for op in jmptargets */
+/* Search dynamically (in Jit) the code target for op in jmptargets */
 CODE *jmp_search_label(OP* op) {
     int ix = jmpix;
-    while (ix--) {
-        if (jmptargets[ix].op) { /* no loop */
-            return jmptargets[ix].labeltgt;
+    while (ix-- > 0) {
+        if (jmptargets[ix].op == op) { /* no loop */
+            return jmptargets[ix].target;
         }
     }
     return (CODE*)0;
@@ -649,25 +670,34 @@ jit_chain(pTHX_
 	if (op->op_type == OP_NULL) continue;
 
         /* check labels -> store jmp targets. ignore dbstate for now (-d -MJit) */
-	if (op->op_type == OP_NEXTSTATE) {
+	if (!dryrun && (op->op_type == OP_NEXTSTATE)) {
             char *label;
-            JMPTGT *cx;
+            JMPTGT cx;
 #ifdef CopLABEL
-            if (label = CopLABEL((COP*)op)) {
+            if (label = CopLABEL((COP*)op))
 #else
-            if (label = ((COP*)op)->cop_label) {
+            if (label = ((COP*)op)->cop_label)
 #endif
-                cx->op = op;
-                cx->label = label;
+            {
+                cx.op = op;
+                cx.label = label;
+                cx.target = code;
                 PUSH_JMP(cx);
             }
+        }
+        if (!dryrun && (op->op_type == OP_ENTER)) {
+            JMPTGT cx;
+            cx.op = op;
+            cx.label = NULL;
+            cx.target = code;
+            PUSH_JMP(cx);
         }
 	
         if (maybranch(op)) {
 	    if (dryrun) {
 		size += sizeof(maybranch_plop);
 	    } else {
-                /* cmp returned op = op->next => jmp */
+                /* store op->next in ecx. cmp returned op = op->next => jmp */
                 DEBUG_v( printf("# maybranch %s\t= 0x%x\n", opname, op->op_ppaddr));
                 dbg_lines("op = PL_op->op_next;");
 		code = push_maybranch_plop(code, op->op_next);
@@ -729,12 +759,27 @@ jit_chain(pTHX_
         /* other before next */
 	if (maybranch(op)) {
             int lsize;
+            SV *keysv = newSViv(PTR2IV(op));
+            /* XXX avoid cyclic loops of already jitted other ops:
+               and => nextstate, cond_expr => enter, ... */
+            if (!otherops)  {
+                otherops = newHV();
+            }
+            if (hv_exists_ent(otherops, keysv, 0)) {
+                DEBUG_v( printf("# %s 0x%x already jitted, code=0x%x\n", PL_op_name[op->op_type],
+                                op, code));
+                goto OUT;
+            } else {
+                hv_store_ent(otherops, keysv, &PL_sv_yes, 0); 
+            }
 	    if (!dryrun) {
-                dbg_cline1("if (PL_op == op/*->op_next*/) goto next_%d;\n", global_label);
-		dbg_stabs1("if (PL_op == op->next) goto next_%d;", global_label);
+		dbg_lines1("if (PL_op == op->op_next) goto next_%d;", global_label);
 	    }
 	    if ((PL_opargs[op->op_type] & OA_CLASS_MASK) == OA_LOGOP) {
                 if (dryrun) {
+                    DEBUG_v( printf("# other_%d: %s => %s\n", global_label,
+                                    PL_op_name[op->op_type],
+                                    PL_op_name[cLOGOPx(op)->op_other->op_type]));
                     size += sizeof(maybranch_check);
                     size += JIT_CHAIN(cLOGOPx(op)->op_other, NULL, NULL);
                     size += sizeof(GOTOREL);
@@ -745,15 +790,15 @@ jit_chain(pTHX_
                     other = JIT_CHAIN(logop->op_other, NULL, NULL); /* sizeof other */
                     other += sizeof(GOTOREL);
                     code = push_maybranch_check(code, other); /* if cmp: je => next */
-                    DEBUG_v( printf("# other_%d: %s\tsize=%x\n", global_label, PL_op_name[logop->op_other->op_type], other));
+                    DEBUG_v( printf("# other_%d: %s\tsize=%x\n", global_label,
+                                    PL_op_name[logop->op_other->op_type], other));
                     code = (CODE*)JIT_CHAIN(logop->op_other, code, code_start);
-                    dbg_lines1("goto branch_%d;", global_label);
+                    dbg_lines1("goto next_%d;", global_label);
                     next = JIT_CHAIN(logop->op_next, NULL, NULL);  /* sizeof next */
-                    DEBUG_v( printf("# next_%d: %s\tsize=%x\n", global_label, PL_op_name[logop->op_next->op_type], next));
+                    DEBUG_v( printf("# next_%d: %s\tsize=%x\n", global_label, 
+                                    PL_op_name[logop->op_next->op_type], next));
                     code = push_gotorel(code, next);
                     dbg_lines1("next_%d:", global_label);
-                    next = JIT_CHAIN(logop->op_next, code, code_start);
-                    dbg_lines1("branch_%d:", global_label);
                 }
 	    } else { /* special branches */
 		int next;
@@ -766,31 +811,34 @@ jit_chain(pTHX_
                     DEBUG_v( printf("# flip_%d\n", global_label));
 		    if ((op->op_flags & OPf_WANT) == OPf_WANT_LIST) {
                         /* need to check the returned op at runtime */
+                        LOGOP* logop;
+                        logop = cLOGOPx(cUNOPx(op)->op_first);
                         if (dryrun) {
-                            size += JIT_CHAIN(cLOGOPx(cUNOPx(op)->op_first)->op_other, NULL, NULL);
+                            size += JIT_CHAIN(logop->op_other, NULL, NULL);
                             size += sizeof(maybranch_check);
                             size += sizeof(GOTOREL);
                         } else {
                             int other;
-                            LOGOP* logop;
-                            logop = cLOGOPx(cUNOPx(op)->op_first);
                             other = JIT_CHAIN(logop->op_other, NULL, NULL); /* sizeof other */
                             other += sizeof(GOTOREL);
                             code = push_maybranch_check(code, other); /* if cmp: je => next */
-                            DEBUG_v( printf("# other_%d: %s\tsize=%x\n", global_label, PL_op_name[logop->op_other->op_type], other));
+                            DEBUG_v( printf("# other_%d: %s\tsize=%x\n", global_label,
+                                            PL_op_name[logop->op_other->op_type], other));
                             code = (CODE*)JIT_CHAIN(logop->op_other, code, code_start);
                         }
 		    }
 		    break;
-		/* TODO store and jump to labels. */
+		/* store and jump to labels. */
 		case OP_ENTERLOOP:
 		case OP_ENTERITER:
                     if (!dryrun) {
                         int nextop, lastop, redoop;
-                        JMPTGT *cx;
+                        LOOPTGT cx;
                         LOOP* loop;
+
                         loop = cLOOPx(op);
-                        /* XXX Need to store away the branch targets in jmptargets, otherwise unjitted code is executed. 
+                        /* XXX Need to store away the branch targets in jmptargets, otherwise 
+                           unjitted code is executed. 
                            We can also try to patchup the jmps afterwards.
                          */
                         DEBUG_v( printf("# %s_%d:\n", PL_op_name[loop->op_type], global_label));
@@ -802,29 +850,30 @@ jit_chain(pTHX_
                         dbg_lines1("goto branch_%d;", global_label);
                         code = push_gotorel(code, lsize); /* jump to end: nextop+lastop+redoop+3*goto */
 
-                        DEBUG_v( printf("# nextop_%d: %s\tsize=%x\n", global_label, PL_op_name[loop->op_nextop->op_type], lsize));
+                        DEBUG_v( printf("# nextop_%d: %s\tsize=%x\n", global_label, 
+                                        PL_op_name[loop->op_nextop->op_type], lsize));
                         dbg_lines1("nextop_%d:", global_label);
-                        cx->op = loop;
-                        cx->label = NULL;
-                        cx->nextop = code;
+                        cx.nextop = code;
                         code = JIT_CHAIN(loop->op_nextop, code, code_start);
 
                         lsize -= nextop + sizeof(CALL)+CALL_SIZE;
                         dbg_lines1("goto branch_%d;", global_label);
                         code = push_gotorel(code, lsize); /* jump to end */
-                        DEBUG_v( printf("# lastop_%d: %s\tsize=%x\n", global_label, PL_op_name[loop->op_lastop->op_type], lsize));
-                        cx->lastop = code;
+                        DEBUG_v( printf("# lastop_%d: %s\tsize=%x\n", global_label, 
+                                        PL_op_name[loop->op_lastop->op_type], lsize));
+                        cx.lastop = code;
                         dbg_lines1("lastop_%d:", global_label);
                         code = JIT_CHAIN(loop->op_lastop, (char*)lsize, code_start);
 
                         lsize -= lastop + sizeof(CALL)+CALL_SIZE;
                         dbg_lines1("goto branch_%d;", global_label);
                         code = push_gotorel(code, lsize); /* jump to end */
-                        DEBUG_v( printf("# redoop_%d: %s\tsize=%x\n", global_label, PL_op_name[loop->op_redoop->op_type], lsize));
-                        cx->redoop = code;
+                        DEBUG_v( printf("# redoop_%d: %s\tsize=%x\n", global_label, 
+                                        PL_op_name[loop->op_redoop->op_type], lsize));
+                        cx.redoop = code;
                         dbg_lines1("redoop_%d:", global_label);
                         code = JIT_CHAIN(loop->op_redoop, (char*)lsize, code_start);
-                        PUSH_JMP(cx);
+                        PUSH_LOOP(cx);
                         dbg_lines1("branch_%d:", global_label);
                     }
 		    break;
@@ -854,66 +903,94 @@ jit_chain(pTHX_
 		    /* XXX We can only jump to jitted and recorded labels, else jump to unjitted code.
                        if (PL_op != ($sym)->op_next && PL_op != (OP*)0){return PL_op;} */
                     if (dryrun) {
-                        if (!op->op_flags & (OPf_STACKED|OPf_SPECIAL)) {
+                        int i = 0;
+                        size += sizeof(ifop0return);
+                        size += sizeof(EPILOG);
 #ifdef USE_ITHREADS
-                            size += sizeof(push_arg2);
+                        i += sizeof(push_arg2);
 #else
-                            size += sizeof(push_arg1);
+                        i += sizeof(push_arg1);
 #endif
-                            size += PUSH_SIZE + sizeof(CALL) + CALL_SIZE;
-                            size += sizeof(GOTOREL);
-                            /*size += sizeof(maybranch_check);*/
-                        }
+                        i += PUSH_SIZE + sizeof(CALL) + CALL_SIZE;
+                        i += sizeof(maybranch_check);
+                        i += sizeof(GOTOREL);
+                        size += i;
+
                     } else { /* get back a OP* address. but we can only jump to PUSH_CX ops */
-                        CODE* labeltgt;
+                        CODE* jumptgt;
                         char *label;
                         OP *retop = NULL;
+                        int i = 0;
+
+                        DEBUG_v( printf("if (!op) return 0\n") );
+                        dbg_lines("if (!op) return 0;");
+                        PUSHc(ifop0return);
+                        PUSHc(EPILOG);
+
+                        dbg_lines1("if (op == op->op_next) goto next_%d;", global_label);
+#ifdef USE_ITHREADS
+                        i += sizeof(push_arg2);
+#else
+                        i += sizeof(push_arg1);
+#endif
+                        i += PUSH_SIZE + sizeof(CALL) + CALL_SIZE;
+                        i += sizeof(maybranch_check);
+                        i += sizeof(GOTOREL);
+
+                        code = push_maybranch_check(code, i); /* if cmp: je => next */
+
                         /* The retop with the found label is only retrieved dynamic, within jit.
-                           so we need to call jmp_search_label to get the labeltgt */
-                        if (!op->op_flags & (OPf_STACKED|OPf_SPECIAL)) {
+                           so we need to call jmp_search_label to get the target */
+                        if (!(op->op_flags & (OPf_STACKED|OPf_SPECIAL))) {
 #ifdef DEBUGGING
                             label = ((PVOP*)op)->op_pv;
-                            DEBUG_v( printf("# pp_goto: %s\n", label));
+                            DEBUG_v( printf("# pp_goto %s via jmp_search_label(op)\n", label));
 #endif
-#ifdef USE_ITHREADS
-                            PUSHc(push_arg2);
-#else
-                            PUSHc(push_arg1);
-#endif
-                            dbg_lines("unsigned char *label = jmp_search_label(op);");
-                            PUSHabs(op);
-                            CALL_ABS(&jmp_search_label);
-                            dbg_lines("if (label) goto label");
-                            dbg_lines("else (PL_op->op_ppaddr)();"); /* not found, continue unjitted */
-                            /*code = push_gotorel(code, (int)label);*/
-                        } else {
-                            dbg_lines1("if (op == op->op_next) goto next_%d;", global_label);
-                            code = push_maybranch_check(code, 5); /* if cmp: je => next */
-                            dbg_lines1("goto lab_%0x:", label);
-                            code = push_gotorel(code, (int)label);
-                            /* dbg_lines("if (!op) return 0;"); */
-                            dbg_lines1("next_%d", global_label);
                         }
+#ifdef USE_ITHREADS
+                        PUSHc(push_arg2);
+#else
+                        PUSHc(push_arg1);
+#endif
+                        dbg_lines("unsigned char *jumptgt = jmp_search_label(op);");
+                        PUSHabs(op);
+                        CALL_ABS(&jmp_search_label);
+
+                        dbg_lines("if (jumptgt) goto jumptgt");
+                        dbg_lines("else (PL_op->op_ppaddr)();"); /* not found, continue unjitted */
+                        code = push_gotorel(code, (int)jumptgt);
+
+                        dbg_lines1("next_%d", global_label);
                     }
+                    break;
 		case OP_NEXT:
+		case OP_REDO:
+		case OP_LAST:
                     /* XXX if not OPf_SPECIAL pop label op->pv from jmptargets (prev. called cxstack), 
                        else just next jmp */
                     if (dryrun) {
                         size += sizeof(GOTOREL);
                     } else {
-                        JMPTGT *jmp;
-                        jmp = POP_JMP;
-                        DEBUG_v( printf("# next %x\n", jmp->nextop));
-                        code = push_gotorel(code, (int)jmp->nextop); /* jmp or rel? */
+                        LOOPTGT *cx;
+                        CODE* tgtop;
+                        cx = POP_LOOP;
+                        if (op->op_type == OP_NEXT) tgtop = cx->nextop;
+                        else if (op->op_type == OP_REDO) tgtop = cx->redoop;
+                        else if (op->op_type == OP_LAST) tgtop = cx->lastop;
+                        DEBUG_v( printf("# %s %x\n", PL_op_name[op->op_type], tgtop));
+                        code = push_gotorel(code, (int)tgtop); /* jmp or rel? */
                     }
+                    break;
 		default:
-		    warn("unsupport branch for %s", PL_op_name[op->op_type]);
+		    warn("NYI unsupported maybranch op %s", PL_op_name[op->op_type]);
 		}
 	    }
 #ifdef DEBUGGING
             global_label++;
 #endif
 	}
+    OUT:
+        ;
     } while (op = op->op_next);
     return dryrun ? size : (int)code;
 }
@@ -977,7 +1054,7 @@ Perl_runops_jit(pTHX)
 #ifdef DEBUGGING
     fh = fopen("run-jit.c", "a");
     fprintf(fh,
-            "struct op { OP* op_next; OP* op_last } OP;"
+            "struct op { OP* op_next; OP* op_other } OP;"
 #ifdef USE_ITHREADS
 	    "struct PerlInterpreter { OP* IOp; };"
 #endif
@@ -1018,6 +1095,9 @@ Perl_runops_jit(pTHX)
         croak("posix_memalign(code,%d,%d) failed", pagesize, size);
     }
 #  else
+    /* e.g. openbsd has no memalign, but aligns automatically to page boundary 
+       if the size is "big enough", around the pagesize. */
+    if (size < pagesize) size = pagesize;
     code = (char*)malloc(size);
     if ((int)code & (pagesize-1)) { /* need to align it manually to 0x1000 */
         int newsize = pagesize - ((int)code & (pagesize-1));
@@ -1102,7 +1182,8 @@ Perl_runops_jit(pTHX)
 # endif
     global_loops++;
 #endif
-    if (jmptargets) free(jmptargets);
+    /*if (jmptargets) free(jmptargets);
+      if (looptargets) free(looptargets);*/
     /*I_ASSERT(size == (code - code_start));*/
     /*size = code - code_start;*/
 
