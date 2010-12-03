@@ -6,6 +6,7 @@ use ExtUtils::Embed qw(ccopts ldopts);
 
 my $core = grep { $_ eq 'PERL_CORE=1' } @ARGV;
 
+my $libs = $Config{libs};
 my $ccflags = $Config{ccflags};
 my $lddlflags = $Config{lddlflags};
 if ($^O eq 'darwin') {
@@ -82,15 +83,26 @@ if ($^O ne 'MSWin32') {
     $ccflags .= " -DHAVE_POSIX_MEMALIGN";
   }
 }
-my $clean_t = File::Spec->catfile("t", "_t*.pl")." ";
-$clean_t .= File::Spec->catfile("help", "*.dis")." ";
-$clean_t .= File::Spec->catfile("help", "*".$Config{obj_ext})." ";
+
+# check for libdisasm: http://bastard.sourceforge.net/libdisasm.html
+# tested with libdisasm-0.23
+if (-e "/usr/local/lib/libdisasm.a" and $Config{ccflags} =~ /-DDEBUGGING/) {
+  $ccflags .= " -DHAVE_LIBDISASM";
+  $libs .= " -ldisasm";
+}
+
+my $clean_t = File::Spec->catfile("t", "_t4*.pl")." ";
+# $clean_t .= File::Spec->catfile("asm", "*.dis")." ";
+$clean_t .= File::Spec->catfile("asm", "*".$Config{obj_ext})." ";
+$clean_t .= File::Spec->catfile("asm", "cc_main".$Config{exe_ext})." ";
+$clean_t .= File::Spec->catfile("asm", "cc_main_nt".$Config{exe_ext})." ";
 
 WriteMakefile
  (
   NAME	    	=> "Jit",
   VERSION_FROM  => "lib/Jit.pm",
   CCFLAGS       => $ccflags,
+  LIBS          => $libs,
   PREREQ_PM => {
     'sigtrap' => 1.00,
   },
@@ -123,28 +135,18 @@ t : test
 }
 
 sub MY::postamble {
-  $bit = "_" . $Config{ptrsize} * 8;
-  if ($Config{useithreads}) {
-    "asm : help/cc_main$bit.dis
+  $bit = ($Config{useithreads} ? "" : "_nt"). "_" . $Config{ptrsize} * 8;
+  "
+asm/3-jit-hand$bit.dis: asm/3-jit-hand$bit.S
+	as asm/3-jit-hand$bit.S -o asm/3-jit-hand$bit.o
+	objdump -d asm/3-jit-hand$bit.o > asm/3-jit-hand$bit.dis
 
-help/cc_main$bit.dis: help/cc_main$bit
-	objdump -d -S help/cc_main$bit > help/cc_main$bit.dis
+asm : asm/cc_main$bit.dis asm/3-jit-hand$bit.dis
 
-help/cc_main$bit: help/cc_main.c
-	\$(PERL) -S cc_harness help/cc_main.c -fno-stack-protector -g3 -o help/cc_main$bit -save-temps -fverbose-asm
+asm/cc_main$bit.dis: asm/cc_main$bit\$(EXE_EXT)
+	objdump -d -S asm/cc_main$bit\$(EXE_EXT) > asm/cc_main$bit.dis
+
+asm/cc_main$bit\$(EXE_EXT): asm/cc_main.c
+	\$(PERL) -S cc_harness asm/cc_main.c -O2 -fno-stack-protector -g3 -o asm/cc_main$bit\$(EXE_EXT) -save-temps -fverbose-asm
 "
-  } else {
-    "asm : help/cc_main_nt$bit.dis help/3-jit-hand.dis
-
-help/cc_main_nt$bit.dis: help/cc_main_nt$bit
-	objdump -d -S help/cc_main_nt$bit > help/cc_main_nt$bit.dis
-
-help/cc_main_nt$bit: help/cc_main_nt.c
-	\$(PERL) -S cc_harness help/cc_main_nt.c -fno-stack-protector -g3 -o help/cc_main_nt$bit -save-temps -fverbose-asm
-
-help/3-jit-hand.dis: help/3-jit-hand.S
-	as help/3-jit-hand.S -o help/3-jit-hand.o
-	objdump -d help/3-jit-hand.o > help/3-jit-hand.dis
-"
-  }
 }

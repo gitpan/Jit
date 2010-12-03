@@ -42,10 +42,8 @@ epilog after final Perl_despatch_signals
 /* my_perl already on stack, Iop at 4(%ebx) */
 T_CHARARR x86thr_prolog[] = { 
     enter_8,
-    push_edi,                                  
-    push_esi,                                  
-    push_ebx,		/* &my_perl */     
-    push_ecx,                                  
+    push_ebx,		/* &my_perl */
+    push_edx,		/* needed temp */
     mov_rebp_ebx(8)     /* mov 0x8(%ebp),%ebx my_perl */
 #ifdef HAVE_DISPATCH
     ,mov_mem_4ebp(0)
@@ -54,10 +52,8 @@ T_CHARARR x86thr_prolog[] = {
 unsigned char *push_prolog(unsigned char *code) {
     unsigned char prolog[] = {
         enter_8,
-        push_edi,                                  
-        push_esi,                                  
-        push_ebx,	   /* &my_perl */     
-        push_ecx,                                  
+        push_ebx,	   /* &my_perl */
+        push_edx,	   /* needed temp */
         mov_rebp_ebx(8)    /* mov 0x8(%ebp),%ebx my_perl */
 #ifdef HAVE_DISPATCH
         ,mov_mem_4ebp(&PL_sig_pending)
@@ -68,20 +64,20 @@ unsigned char *push_prolog(unsigned char *code) {
 }
 
 T_CHARARR x86thr_epilog[] = {
-    pop_ecx,
+    pop_edx,
     pop_ebx,
-    pop_esi,
-    pop_edi,
     leave,		/* restore esp, ebp */
     ret
 };
 
-/* call near with my_perl as arg1 */
+/* call near with my_perl (ptr at %ebx) as arg1.
+   push my_perl, call near offset $PL_op->op_ppaddr 
+ */
 T_CHARARR x86thr_call[]  = {
     0x89,0x1c,0x24,	/* mov    %ebx,(%esp) */
     0xE8		/* call near offset */
 };
-/* push my_perl, call near offset $PL_op->op_ppaddr */
+/* after each call: PL_op = eax. PL_op is at my_perl->Iop, so update it for threading concurrency. */
 T_CHARARR x86thr_save_plop[] = {
     0x89,0x43,0x04	/* mov    %eax,0x4(%ebx) */
 }; /* save new PL_op into my_perl */
@@ -92,6 +88,41 @@ T_CHARARR x86thr_dispatch[] = {
     test_eax_eax,
     je(8)  		/* je     +8 */
 }; /* call   Perl_despatch_signals */
+
+T_CHARARR maybranch_plop[] = {
+    mov_mem_rebp8,fourbyte
+};
+CODE *
+push_maybranch_plop(CODE *code, OP* next) {
+    CODE maybranch_plop[] = {
+	mov_mem_rebp8};
+    PUSHc(maybranch_plop);
+    PUSHrel(&next);
+    return code;
+}
+T_CHARARR maybranch_check[] = {
+    cmp_eax_rebp8,
+    je_0, fourbyte};
+T_CHARARR maybranch_checkw[] = {
+    cmp_eax_rebp8,
+    jew_0, fourbyte};
+CODE *
+push_maybranch_check(CODE *code, int next) {
+    CODE maybranch_check[] = {
+	cmp_eax_rebp8,
+	je_0};
+    if (abs(next) > 128) {
+        CODE maybranch_checkw[] = {
+            cmp_eax_rebp8,
+            jew_0};
+        PUSHc(maybranch_checkw);
+        PUSHrel((CODE*)next);
+    } else {
+        PUSHc(maybranch_check);
+        PUSHbyte(next);
+    }
+    return code;
+}
 
 # define PROLOG 	x86thr_prolog
 # define CALL	 	x86thr_call

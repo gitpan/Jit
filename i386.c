@@ -1,5 +1,5 @@
 /*
-x86 not-threaded, PL_op in ebx, PL_sig_pending temp in ecx
+x86 not-threaded, PL_op in ebx, PL_sig_pending temp in 4(%ebp)
 
 prolog:
 	55                   	push   %ebp
@@ -33,8 +33,8 @@ epilog:
 
 T_CHARARR x86_prolog[] = {
     enter_8,
-    push_ebx,		
-    push_ecx,		/* temp op->next */
+    push_ebx,
+    push_edx,
     mov_mem_ebx(0)	/* &PL_op  */
 #ifdef HAVE_DISPATCH
     ,mov_mem_4ebp(0)	/* &PL_sig_pending */
@@ -45,8 +45,8 @@ unsigned char * push_prolog(unsigned char *code) {
     unsigned char prolog[] = {
         enter_8,
         push_ebx,	/* &PL_op */
-        push_ecx,
-        mov_mem_ebx(&PL_op)
+        push_edx,	/* needed temp */
+        mov_mem_ebx(&PL_op) /* %ebx *IS* preserved across function calls */
 #ifdef HAVE_DISPATCH
         ,mov_mem_4ebp(&PL_sig_pending)
 #endif
@@ -56,7 +56,7 @@ unsigned char * push_prolog(unsigned char *code) {
 }
 
 T_CHARARR x86_epilog[] = {
-    pop_ecx,
+    pop_edx,
     pop_ebx,
     leave,		/* restore esp */
     ret
@@ -73,6 +73,44 @@ T_CHARARR x86_dispatch[] = {
     test_eax_eax,
     je(5)  		/* je     +5 */
 };      		/* call   Perl_despatch_signals */
+
+T_CHARARR maybranch_plop[] = {
+    mov_mem_rebp8,fourbyte
+};
+CODE *
+push_maybranch_plop(CODE *code, OP* next) {
+    CODE maybranch_plop[] = {
+	mov_mem_rebp8};
+    PUSHc(maybranch_plop);
+    PUSHrel(&next);
+    return code;
+}
+T_CHARARR maybranch_check[] = {
+    cmp_eax_rebp8,
+    je_0, fourbyte
+};
+T_CHARARR maybranch_checkw[] = {
+    cmp_eax_rebp8,
+    jew_0, fourbyte
+};
+
+CODE *
+push_maybranch_check(CODE *code, int next) {
+    CODE maybranch_check[] = {
+	cmp_eax_rebp8,
+	je_0};
+    if (abs(next) > 128) {
+        CODE maybranch_checkw[] = {
+            cmp_eax_rebp8,
+            jew_0};
+        PUSHc(maybranch_checkw);
+        PUSHrel((CODE*)next);
+    } else {
+        PUSHc(maybranch_check);
+        PUSHbyte(next);
+    }
+    return code;
+}
 
 # define PROLOG 	x86_prolog
 # define EPILOG         x86_epilog

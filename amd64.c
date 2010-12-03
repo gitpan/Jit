@@ -66,23 +66,24 @@ Dump of assembler code from 0x1127000 to 0x1127058:
 */
 
 T_CHARARR amd64_prolog[] = {
-    enter_8,
+    enter_8
 #ifdef HAVE_DISPATCH
-    push_rcx,
+    ,push_rcx		/* volatile, but ok for &PL_sig_pending check */
 #endif
-    push_r12 		/* op->next */
+    /*,push_r12*/ 	/* op->next */
 #ifdef HAVE_DISPATCH	/* &PL_sig_pending */
     ,mov_mem_ecx, fourbyte
 #endif
 };
 
 unsigned char *push_prolog(unsigned char *code) {
-    T_CHARARR prolog1[] = {
+    CODE prolog1[] = {
         enter_8,
+	push_rbx
 #ifdef HAVE_DISPATCH
-	push_rcx,
+	,push_rcx
 #endif
-        push_r12};
+        /*,push_r12*/};
     PUSHc(prolog1);
 #ifdef HAVE_DISPATCH
     T_CHARARR prolog2[] = {
@@ -93,7 +94,7 @@ unsigned char *push_prolog(unsigned char *code) {
     return code;
 }
 T_CHARARR amd64_epilog[] = {
-    pop_r12,
+    /*pop_r12,*/
 #ifdef HAVE_DISPATCH
     pop_rcx,
 #endif
@@ -118,44 +119,49 @@ T_CHARARR amd64_dispatch[] = {
     je(5)};
 
 T_CHARARR maybranch_plop[] = {
-    mov_mem_r12, fourbyte
-    /*,mov_eax_8ebp*/
+    /* r12 is not save during function calls, put it onto the local stack */
+    mov_mem_rebp8, fourbyte
 };
 unsigned char *push_maybranch_plop(unsigned char *code, OP* next) {
-    T_CHARARR maybranch_plop1[] = {
-	mov_mem_r12};
-    /*T_CHARARR maybranch_plop2[] = {
-	mov_eax_8ebp};*/
+    CODE maybranch_plop1[] = {
+	mov_mem_rebp8};
     PUSHc(maybranch_plop1);
-    PUSHabs(next);
-    /*PUSHc(maybranch_plop2);*/
+    PUSHrel(&next);
     return code;
 }
 T_CHARARR maybranch_check[] = {
-    cmp_rax_r12,
-    je(0)
+    cmp_eax_rebp8,
+    je_0,fourbyte
+};
+T_CHARARR maybranch_checkw[] = {
+    cmp_eax_rebp8,
+    jew_0,fourbyte
 };
 unsigned char *
-push_maybranch_check(unsigned char *code, int next) {
-    unsigned char maybranch_check[] = {
-	cmp_rax_r12,
+push_maybranch_check(unsigned char *code, int fw) {
+    CODE maybranch_check[] = {
+	cmp_eax_rebp8, 	/* saved prev op->next at -4(%esp) */
 	je_0};
-    if (abs(next) > 128) {
-        printf("ERROR: je overflow %d > 128\n", next);
+    if (abs(fw) > 128) {
+        CODE maybranch_checkw[] = {
+            cmp_eax_rebp8,
+            jew_0};
+        PUSHc(maybranch_checkw);
+        PUSHrel(fw);
     } else {
         PUSHc(maybranch_check);
-        PUSHbyte(next);
+        PUSHbyte(fw);
     }
     return code;
 }
 
 T_CHARARR gotorel[] = {
-    0xe9, fourbyte
+    jmpq(0)
 };
 unsigned char *
 push_gotorel(unsigned char *code, U32 label) {
-    unsigned char gotorel[] = {
-	0xe9};
+    CODE gotorel[] = {
+	jmpq_0};
     PUSHc(gotorel);
     PUSHabs(&label);
     return code;
